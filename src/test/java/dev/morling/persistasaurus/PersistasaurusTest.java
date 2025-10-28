@@ -24,23 +24,35 @@ import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
 public class PersistasaurusTest {
 
     private ExecutionLog executionLog;
+    private Persistasaurus persistasaurus;
 
     @BeforeAll
     public static void removeDatabaseFile() {
+        ExecutionLog.getInstance().close();
         File dbFile = new File("execution_log.db");
+        File walFile = new File("execution_log.db-wal");
+        File shmFile = new File("execution_log.db-shm");
         if (dbFile.exists()) {
             dbFile.delete();
         }
+        if (walFile.exists()) {
+            walFile.delete();
+        }
+        if (shmFile.exists()) {
+            shmFile.delete();
+        }
+        ExecutionLog.getInstance().reset();
     }
 
     @BeforeEach
     public void setup() {
-        executionLog = new ExecutionLog();
+        executionLog = ExecutionLog.getInstance();
+        persistasaurus = new Persistasaurus();
     }
 
     @AfterEach
     public void teardown() {
-        executionLog.close();
+        persistasaurus.shutdown();
     }
 
     @Test
@@ -48,7 +60,7 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = -1;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
         flow.sayHello();
 
         // Verify the flow method was logged
@@ -77,7 +89,7 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = 3;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
 
         // First execution should fail at step 4 (iteration 3)
         assertThatThrownBy(() -> flow.sayHello())
@@ -120,7 +132,7 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = 2;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
 
         // First attempt - fails at count 2
         assertThatThrownBy(() -> flow.sayHello())
@@ -158,8 +170,8 @@ public class PersistasaurusTest {
         UUID uuid1 = UUID.randomUUID();
         UUID uuid2 = UUID.randomUUID();
 
-        HelloWorldFlow flow1 = Persistasaurus.getFlow(HelloWorldFlow.class, uuid1);
-        HelloWorldFlow flow2 = Persistasaurus.getFlow(HelloWorldFlow.class, uuid2);
+        HelloWorldFlow flow1 = persistasaurus.getFlow(HelloWorldFlow.class, uuid1);
+        HelloWorldFlow flow2 = persistasaurus.getFlow(HelloWorldFlow.class, uuid2);
 
         flow1.sayHello();
         flow2.sayHello();
@@ -179,7 +191,7 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = -1;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
         flow.sayHello();
 
         // Verify parameters for second step call (count=1)
@@ -196,7 +208,7 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = -1;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
         flow.sayHello();
 
         // Verify return values for each step

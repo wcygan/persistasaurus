@@ -17,14 +17,17 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 public class ExecutionLog {
 
     public record Invocation(
                              UUID id,
                              int step,
-                             long timestamp,
+                             Instant timestamp,
                              String className,
                              String methodName,
                              boolean isComplete,
@@ -34,16 +37,32 @@ public class ExecutionLog {
     }
 
     private static final String DB_URL = "jdbc:sqlite:execution_log.db";
+    private static final ExecutionLog INSTANCE = new ExecutionLog();
+
     private Connection connection;
 
-    public ExecutionLog() {
+    private ExecutionLog() {
+        setupConnection();
+    }
+
+    private void setupConnection() {
         try {
             connection = DriverManager.getConnection(DB_URL);
+            connection.setAutoCommit(true);
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("PRAGMA journal_mode=WAL");
+                stmt.execute("PRAGMA synchronous=NORMAL");
+                stmt.execute("PRAGMA busy_timeout=5000");
+            }
             createTableIfNotExists();
         }
         catch (SQLException e) {
             throw new RuntimeException("Failed to initialize ExecutionLog", e);
         }
+    }
+
+    public static ExecutionLog getInstance() {
+        return INSTANCE;
     }
 
     private void createTableIfNotExists() throws SQLException {
@@ -54,7 +73,8 @@ public class ExecutionLog {
                     timestamp INTEGER NOT NULL,
                     class_name TEXT NOT NULL,
                     method_name TEXT NOT NULL,
-                    is_complete INTEGER,
+                    delay INTEGER,
+                    is_complete INTEGER NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 1,
                     parameters BLOB,
                     return_value BLOB,
@@ -67,10 +87,10 @@ public class ExecutionLog {
         }
     }
 
-    public void logInvocationStart(UUID id, int step, String className, String methodName, Object[] parameters) {
+    public synchronized void logInvocationStart(UUID id, int step, String className, String methodName, Duration delay, Object[] parameters) {
         String insertSQL = """
-                INSERT INTO execution_log (id, step, timestamp, class_name, method_name, is_complete, attempts, parameters)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO execution_log (id, step, timestamp, class_name, method_name, delay, is_complete, attempts, parameters)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id, step)
                 DO UPDATE SET attempts = attempts + 1
                 """;
@@ -78,12 +98,17 @@ public class ExecutionLog {
         try (PreparedStatement pstmt = connection.prepareStatement(insertSQL)) {
             pstmt.setString(1, id.toString());
             pstmt.setInt(2, step);
-            pstmt.setLong(3, System.currentTimeMillis());
+            pstmt.setLong(3, Instant.now().toEpochMilli());
             pstmt.setString(4, className);
             pstmt.setString(5, methodName);
-            pstmt.setInt(6, 0);
-            pstmt.setInt(7, 1);
-            pstmt.setBytes(8, serializeToBytes(parameters));
+
+            if (delay != null) {
+                pstmt.setLong(6, delay.toMillis());
+            }
+
+            pstmt.setInt(7, 0);
+            pstmt.setInt(8, 1);
+            pstmt.setBytes(9, serializeToBytes(parameters));
             pstmt.executeUpdate();
         }
         catch (SQLException e) {
@@ -91,12 +116,21 @@ public class ExecutionLog {
         }
     }
 
-    public void logInvocationCompletion(UUID id, int step, Object returnValue) {
+    public synchronized void logInvocationCompletion(UUID id, int step, Object returnValue) {
         String updateSQL = """
                 UPDATE execution_log
                 SET is_complete = 1, return_value = ?
                 WHERE id = ? AND step = ?
                 """;
+
+        if (returnValue instanceof CompletableFuture) {
+            try {
+                returnValue = ((CompletableFuture<?>) returnValue).get();
+            }
+            catch (Exception e) {
+                throw new RuntimeException("Couldn't get value", e);
+            }
+        }
 
         try (PreparedStatement pstmt = connection.prepareStatement(updateSQL)) {
             pstmt.setBytes(1, serializeToBytes(returnValue));
@@ -109,7 +143,7 @@ public class ExecutionLog {
         }
     }
 
-    public Invocation getInvocation(UUID id, int step) {
+    public synchronized Invocation getInvocation(UUID id, int step) {
         String selectSQL = """
                 SELECT id, step, timestamp, class_name, method_name, is_complete, attempts, parameters, return_value
                 FROM execution_log
@@ -125,7 +159,7 @@ public class ExecutionLog {
                     return new Invocation(
                             UUID.fromString(rs.getString("id")),
                             rs.getInt("step"),
-                            rs.getLong("timestamp"),
+                            Instant.ofEpochMilli(rs.getLong("timestamp")),
                             rs.getString("class_name"),
                             rs.getString("method_name"),
                             rs.getInt("is_complete") == 1,
@@ -141,6 +175,40 @@ public class ExecutionLog {
         catch (SQLException e) {
             throw new RuntimeException("Failed to retrieve invocation", e);
         }
+    }
+
+    public synchronized java.util.List<Invocation> getIncompleteFlows() {
+        String selectSQL = """
+                SELECT id, step, timestamp, class_name, method_name, is_complete, attempts, parameters, return_value
+                FROM execution_log
+                WHERE step = 0
+                  AND is_complete = 0
+                ORDER BY timestamp ASC
+                """;
+
+        java.util.List<Invocation> incompleteFlows = new java.util.ArrayList<>();
+
+        try (PreparedStatement pstmt = connection.prepareStatement(selectSQL);
+                ResultSet rs = pstmt.executeQuery()) {
+
+            while (rs.next()) {
+                incompleteFlows.add(new Invocation(
+                        UUID.fromString(rs.getString("id")),
+                        rs.getInt("step"),
+                        Instant.ofEpochMilli(rs.getLong("timestamp")),
+                        rs.getString("class_name"),
+                        rs.getString("method_name"),
+                        rs.getInt("is_complete") == 1,
+                        rs.getInt("attempts"),
+                        (Object[]) deserializeFromBytes(rs.getBytes("parameters")),
+                        deserializeFromBytes(rs.getBytes("return_value"))));
+            }
+        }
+        catch (SQLException e) {
+            throw new RuntimeException("Failed to retrieve incomplete flows", e);
+        }
+
+        return incompleteFlows;
     }
 
     private byte[] serializeToBytes(Object obj) {
@@ -173,7 +241,12 @@ public class ExecutionLog {
         }
     }
 
-    public void close() {
+    public synchronized void reset() {
+        close();
+        setupConnection();
+    }
+
+    public synchronized void close() {
         if (connection != null) {
             try {
                 connection.close();

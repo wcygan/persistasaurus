@@ -35,9 +35,13 @@ public class HelloWorldFlow {
 Retrieve and invoke a flow like so:
 
 ```
+Persistasaurus persistasaurus = new Persistasaurus();
+
 UUID uuid = UUID.randomUUID();
-HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
 flow.sayHello();
+
+persistasaurus.close();
 ```
 
 If the program runs to completion, the following will be logged to stdout:
@@ -71,6 +75,42 @@ Sum: 10
 ```
 
 ¹ Some restrictions apply: they must be non-final and have a visibility of `protected` or wider.
+
+## Delayed Steps
+
+Steps of a flow can be delayed.
+To do so, add the `@Step::delay()` option to the step in question.
+The step method must have a return type of `CompletableFuture`.
+The flow (or step) invoking a delayed step must return control to the caller immediately in order to ensure delayed execution.
+When the delay period has passed, the flow will be executed again,
+replay all the previously executed steps, and then continue from the delayed step.
+
+```
+@Flow
+public void sayHello() throws Exception {
+    List<String> greetings = new ArrayList<>();
+    greetings.add(greet("Bob"));
+
+    CompletableFuture<String> greeting = greetDelayed("Barry");
+    if (!greeting.isDone()) {
+        return;
+    }
+
+    greetings.add(greeting.get());
+
+    System.out.println(String.format("All greetings: %s", greetings));
+}
+
+@Step
+protected String greet(String name) {
+    return String.format("Hello, %s", name);
+}
+
+@Step(delay = 5, timeUnit = ChronoUnit.SECONDS)
+protected CompletableFuture<String> greetDelayed(String name) {
+    return CompletableFuture.completedFuture(String.format("Delayed hello, %s", name));
+}
+```
 
 ## Examining the Execution Log
 

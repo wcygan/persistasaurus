@@ -9,8 +9,11 @@ package dev.morling.persistasaurus;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.time.temporal.ChronoUnit;
 
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Step {
+    long delay() default Long.MIN_VALUE;
 
+    ChronoUnit timeUnit() default ChronoUnit.SECONDS;
 }

@@ -1,0 +1,22 @@
+<!--
+
+     SPDX-License-Identifier: Apache-2.0
+
+     Copyright The original authors
+
+     Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
+
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!-- Pattern with timestamp and abbreviated package names -->
+            <!-- %d: timestamp, %t: thread name, %-5level: log level, %c{30}: abbreviated to 30 chars -->
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %c{30} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="info">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>
