@@ -35,13 +35,9 @@ public class HelloWorldFlow {
 Retrieve and invoke a flow like so:
 
 ```
-Persistasaurus persistasaurus = new Persistasaurus();
-
 UUID uuid = UUID.randomUUID();
-HelloWorldFlow flow = persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
 flow.sayHello();
-
-persistasaurus.close();
 ```
 
 If the program runs to completion, the following will be logged to stdout:
@@ -68,7 +64,6 @@ After restarting the flow (using the same UUID as before), it will retry that fa
 The first two steps which were already successfully are not re-executed:
 
 ```
-Hello, World (2)
 Hello, World (3)
 Hello, World (4)
 Sum: 10

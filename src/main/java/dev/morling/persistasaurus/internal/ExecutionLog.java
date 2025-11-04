@@ -9,6 +9,7 @@ package dev.morling.persistasaurus.internal;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.sql.Connection;
@@ -243,6 +244,7 @@ public class ExecutionLog {
 
     public synchronized void reset() {
         close();
+        deleteDatabaseFiles();
         setupConnection();
     }
 
@@ -255,6 +257,21 @@ public class ExecutionLog {
                 // Log but don't throw
                 System.err.println("Failed to close connection: " + e.getMessage());
             }
+        }
+    }
+
+    private void deleteDatabaseFiles() {
+        File dbFile = new File("execution_log.db");
+        File walFile = new File("execution_log.db-wal");
+        File shmFile = new File("execution_log.db-shm");
+        if (dbFile.exists()) {
+            dbFile.delete();
+        }
+        if (walFile.exists()) {
+            walFile.delete();
+        }
+        if (shmFile.exists()) {
+            shmFile.delete();
         }
     }
 }

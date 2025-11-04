@@ -38,13 +38,14 @@ public class Persistasaurus {
 
     private static final Logger LOG = LoggerFactory.getLogger(Persistasaurus.class);
 
-    private final ScheduledExecutorService scheduler;
+    private static final ScheduledExecutorService SCHEDULER;
 
-    public Persistasaurus() {
-        scheduler = Executors.newScheduledThreadPool(1, Thread.ofVirtual().factory());
+    static {
+        SCHEDULER = Executors.newScheduledThreadPool(1, Thread.ofVirtual().factory());
+        recoverIncompleteFlows();
     }
 
-    public void recoverIncompleteFlows() {
+    public static void recoverIncompleteFlows() {
         try {
             ExecutionLog executionLog = ExecutionLog.getInstance();
             List<Invocation> incompleteFlows = executionLog.getIncompleteFlows();
@@ -75,11 +76,11 @@ public class Persistasaurus {
                 .toArray(Class<?>[]::new);
     }
 
-    private void scheduleDelayedFlow(UUID id, String className, String methodName, Object[] parameters, Duration delay) {
+    private static void scheduleDelayedFlow(UUID id, String className, String methodName, Object[] parameters, Duration delay) {
         LOG.info("Scheduling delayed flow {} for class {}.{} with delay of {} seconds",
                 id, className, methodName, delay.getSeconds());
 
-        scheduler.schedule(() -> {
+        SCHEDULER.schedule(() -> {
             try {
                 LOG.info("Executing delayed flow {} for class {}.{}",
                         id, className, methodName);
@@ -97,25 +98,25 @@ public class Persistasaurus {
         }, delay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    public void shutdown() {
-        scheduler.shutdown();
-        try {
-            if (!scheduler.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                scheduler.shutdownNow();
-            }
-        }
-        catch (InterruptedException e) {
-            scheduler.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-    }
+    // public void shutdown() {
+    // SCHEDULER.shutdown();
+    // try {
+    // if (!SCHEDULER.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+    // SCHEDULER.shutdownNow();
+    // }
+    // }
+    // catch (InterruptedException e) {
+    // SCHEDULER.shutdownNow();
+    // Thread.currentThread().interrupt();
+    // }
+    // }
 
-    public <T> T getFlow(Class<T> clazz, UUID id) {
+    public static <T> T getFlow(Class<T> clazz, UUID id) {
         try {
             return new ByteBuddy()
                     .subclass(clazz)
                     .method(ElementMatchers.any())
-                    .intercept(MethodDelegation.to(new Interceptor(this, id)))
+                    .intercept(MethodDelegation.to(new Interceptor(id)))
                     .make()
                     .load(Persistasaurus.class.getClassLoader())
                     .getLoaded()
@@ -132,14 +133,12 @@ public class Persistasaurus {
         private static final Logger LOG = LoggerFactory.getLogger(Interceptor.class);
 
         private final ExecutionLog executionLog;
-        private final Persistasaurus persistasaurus;
         private final UUID id;
         private int step;
         private boolean delayed;
 
-        public Interceptor(Persistasaurus persistasaurus, UUID id) {
+        public Interceptor(UUID id) {
             this.executionLog = ExecutionLog.getInstance();
-            this.persistasaurus = persistasaurus;
             this.id = id;
             this.step = 0;
             this.delayed = false;
@@ -207,7 +206,7 @@ public class Persistasaurus {
                 if (loggedInvocation == null) {
                     // Get the flow invocation (step 0) to schedule it
                     Invocation flowInvocation = executionLog.getInvocation(id, 0);
-                    persistasaurus.scheduleDelayedFlow(id, flowInvocation.className(), flowInvocation.methodName(),
+                    scheduleDelayedFlow(id, flowInvocation.className(), flowInvocation.methodName(),
                             flowInvocation.parameters(), delay);
                 }
 

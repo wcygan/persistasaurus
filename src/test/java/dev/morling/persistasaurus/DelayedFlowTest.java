@@ -9,14 +9,11 @@ package dev.morling.persistasaurus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.File;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -26,35 +23,11 @@ import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
 public class DelayedFlowTest {
 
     private ExecutionLog executionLog;
-    private Persistasaurus persistasaurus;
-
-    @BeforeAll
-    public static void removeDatabaseFile() {
-        ExecutionLog.getInstance().close();
-        File dbFile = new File("execution_log.db");
-        File walFile = new File("execution_log.db-wal");
-        File shmFile = new File("execution_log.db-shm");
-        if (dbFile.exists()) {
-            dbFile.delete();
-        }
-        if (walFile.exists()) {
-            walFile.delete();
-        }
-        if (shmFile.exists()) {
-            shmFile.delete();
-        }
-        ExecutionLog.getInstance().reset();
-    }
 
     @BeforeEach
     public void setup() {
         executionLog = ExecutionLog.getInstance();
-        persistasaurus = new Persistasaurus();
-    }
-
-    @AfterEach
-    public void teardown() {
-        persistasaurus.shutdown();
+        executionLog.reset();
     }
 
     @Test
@@ -63,7 +36,7 @@ public class DelayedFlowTest {
         DelayedTestFlow.executed = false;
 
         UUID uuid = UUID.randomUUID();
-        DelayedTestFlow flow = persistasaurus.getFlow(DelayedTestFlow.class, uuid);
+        DelayedTestFlow flow = Persistasaurus.getFlow(DelayedTestFlow.class, uuid);
 
         // Start the flow - the delayed step should be scheduled
         flow.runWithDelay();
