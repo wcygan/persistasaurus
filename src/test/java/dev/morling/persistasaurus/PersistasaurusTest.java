@@ -15,6 +15,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import dev.morling.persistasaurus.Persistasaurus.FlowInstance;
 import dev.morling.persistasaurus.internal.ExecutionLog;
 import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
 
@@ -29,12 +30,43 @@ public class PersistasaurusTest {
     }
 
     @Test
+    public void shouldRunFlowSuccessfully() {
+        HelloWorldFlow.FAIL_ON_COUNT = -1;
+        UUID uuid = UUID.randomUUID();
+
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        flow.run(f -> f.sayHello());
+
+        // Verify the flow method was logged
+        Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
+        assertThat(flowInvocation).isNotNull();
+        assertThat(flowInvocation.methodName()).isEqualTo("sayHello");
+        assertThat(flowInvocation.isComplete()).isTrue();
+        assertThat(flowInvocation.attempts()).isEqualTo(1);
+
+        // Verify all step invocations were logged (5 iterations)
+        for (int i = 0; i < 5; i++) {
+            Invocation stepInvocation = executionLog.getInvocation(uuid, i + 1);
+            assertThat(stepInvocation).isNotNull();
+            assertThat(stepInvocation.methodName()).isEqualTo("say");
+            assertThat(stepInvocation.isComplete()).isTrue();
+            assertThat(stepInvocation.attempts()).isEqualTo(1);
+            assertThat(stepInvocation.parameters()).hasSize(2);
+            assertThat(stepInvocation.parameters()[0]).isEqualTo("World");
+            assertThat(stepInvocation.parameters()[1]).isEqualTo(i);
+            assertThat(stepInvocation.returnValue()).isEqualTo(i);
+        }
+    }
+
+    @Test
     public void shouldExecuteFlowSuccessfully() {
         HelloWorldFlow.FAIL_ON_COUNT = -1;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
-        flow.sayHello();
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        int sum = flow.execute(f -> f.sayHello());
+
+        assertThat(sum).isEqualByComparingTo(10);
 
         // Verify the flow method was logged
         Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
@@ -62,10 +94,10 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = 3;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
 
         // First execution should fail at step 4 (iteration 3)
-        assertThatThrownBy(() -> flow.sayHello())
+        assertThatThrownBy(() -> flow.run(f -> f.sayHello()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("I don't like this count: 3");
 
@@ -85,7 +117,7 @@ public class PersistasaurusTest {
 
         // Fix the failure condition and retry
         HelloWorldFlow.FAIL_ON_COUNT = -1;
-        flow.sayHello();
+        flow.run(f -> f.sayHello());
 
         // Verify the failed step now has 2 attempts and is complete
         Invocation retriedStep = executionLog.getInvocation(uuid, 4);
@@ -105,24 +137,24 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = 2;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
 
         // First attempt - fails at count 2
-        assertThatThrownBy(() -> flow.sayHello())
+        assertThatThrownBy(() -> flow.run(f -> f.sayHello()))
                 .isInstanceOf(IllegalArgumentException.class);
 
         Invocation failedStep = executionLog.getInvocation(uuid, 3);
         assertThat(failedStep.attempts()).isEqualTo(1);
 
         // Second attempt - still fails
-        assertThatThrownBy(() -> flow.sayHello())
+        assertThatThrownBy(() -> flow.run(f -> f.sayHello()))
                 .isInstanceOf(IllegalArgumentException.class);
 
         failedStep = executionLog.getInvocation(uuid, 3);
         assertThat(failedStep.attempts()).isEqualTo(2);
 
         // Third attempt - still fails
-        assertThatThrownBy(() -> flow.sayHello())
+        assertThatThrownBy(() -> flow.run(f -> f.sayHello()))
                 .isInstanceOf(IllegalArgumentException.class);
 
         failedStep = executionLog.getInvocation(uuid, 3);
@@ -130,7 +162,7 @@ public class PersistasaurusTest {
 
         // Fix and retry - should succeed
         HelloWorldFlow.FAIL_ON_COUNT = -1;
-        flow.sayHello();
+        flow.run(f -> f.sayHello());
 
         failedStep = executionLog.getInvocation(uuid, 3);
         assertThat(failedStep.attempts()).isEqualTo(4);
@@ -143,11 +175,11 @@ public class PersistasaurusTest {
         UUID uuid1 = UUID.randomUUID();
         UUID uuid2 = UUID.randomUUID();
 
-        HelloWorldFlow flow1 = Persistasaurus.getFlow(HelloWorldFlow.class, uuid1);
-        HelloWorldFlow flow2 = Persistasaurus.getFlow(HelloWorldFlow.class, uuid2);
+        FlowInstance<HelloWorldFlow> flow1 = Persistasaurus.getFlow(HelloWorldFlow.class, uuid1);
+        FlowInstance<HelloWorldFlow> flow2 = Persistasaurus.getFlow(HelloWorldFlow.class, uuid2);
 
-        flow1.sayHello();
-        flow2.sayHello();
+        flow1.run(f -> f.sayHello());
+        flow2.run(f -> f.sayHello());
 
         // Verify both flows have independent logs
         Invocation flow1Invocation = executionLog.getInvocation(uuid1, 0);
@@ -164,8 +196,8 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = -1;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
-        flow.sayHello();
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        flow.run(f -> f.sayHello());
 
         // Verify parameters for second step call (count=1)
         Invocation stepInvocation = executionLog.getInvocation(uuid, 2);
@@ -181,8 +213,8 @@ public class PersistasaurusTest {
         HelloWorldFlow.FAIL_ON_COUNT = -1;
         UUID uuid = UUID.randomUUID();
 
-        HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
-        flow.sayHello();
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        flow.run(f -> f.sayHello());
 
         // Verify return values for each step
         for (int i = 0; i < 5; i++) {

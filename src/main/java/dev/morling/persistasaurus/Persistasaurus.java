@@ -16,9 +16,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,10 +39,9 @@ public class Persistasaurus {
 
     private static final Logger LOG = LoggerFactory.getLogger(Persistasaurus.class);
 
-    private static final ScheduledExecutorService SCHEDULER;
-
+    private static final ExecutorService EXECUTOR;
     static {
-        SCHEDULER = Executors.newScheduledThreadPool(1, Thread.ofVirtual().factory());
+        EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
         recoverIncompleteFlows();
     }
 
@@ -54,11 +54,10 @@ public class Persistasaurus {
                 LOG.info("Found {} incomplete flows, scheduling for immediate execution", incompleteFlows.size());
 
                 for (Invocation flow : incompleteFlows) {
-                    LOG.info("Scheduling incomplete flow {} for class {}.{} (attempt {})",
+                    LOG.info("Running incomplete flow {} for class {}.{} (attempt {})",
                             flow.id(), flow.className(), flow.methodName(), flow.attempts());
 
-                    scheduleDelayedFlow(flow.id(), flow.className(), flow.methodName(),
-                            flow.parameters(), Duration.ZERO);
+                    runFlowAsync(flow.id(), flow.className(), flow.methodName(), flow.parameters());
                 }
             }
         }
@@ -76,42 +75,33 @@ public class Persistasaurus {
                 .toArray(Class<?>[]::new);
     }
 
-    private static void scheduleDelayedFlow(UUID id, String className, String methodName, Object[] parameters, Duration delay) {
-        LOG.info("Scheduling delayed flow {} for class {}.{} with delay of {} seconds",
-                id, className, methodName, delay.getSeconds());
+    private static void runFlowAsync(UUID id, String className, String methodName, Object[] parameters) {
+        LOG.info("Running flow {} for class {}.{}", id, className, methodName);
 
-        SCHEDULER.schedule(() -> {
-            try {
-                LOG.info("Executing delayed flow {} for class {}.{}",
-                        id, className, methodName);
+        try {
+            LOG.info("Executing delayed flow {} for class {}.{}",
+                    id, className, methodName);
 
-                Class<?> flowClass = Class.forName(className);
-                Object flow = getFlow(flowClass, id);
-
-                Method method = flowClass.getMethod(methodName, getParameterTypes(parameters));
-                method.invoke(flow, parameters);
-            }
-            catch (Exception e) {
-                LOG.error("Failed to execute delayed flow {} for class {}.{}: {}",
-                        id, className, methodName, e.getMessage(), e);
-            }
-        }, delay.toMillis(), TimeUnit.MILLISECONDS);
+            Class<?> flowClass = Class.forName(className);
+            FlowInstance<?> flow = getFlow(flowClass, id);
+            flow.runAsync(c -> {
+                Method method;
+                try {
+                    method = flowClass.getMethod(methodName, getParameterTypes(parameters));
+                    method.invoke(c, parameters);
+                }
+                catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
+        catch (Exception e) {
+            LOG.error("Failed to execute delayed flow {} for class {}.{}: {}",
+                    id, className, methodName, e.getMessage(), e);
+        }
     }
 
-    // public void shutdown() {
-    // SCHEDULER.shutdown();
-    // try {
-    // if (!SCHEDULER.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
-    // SCHEDULER.shutdownNow();
-    // }
-    // }
-    // catch (InterruptedException e) {
-    // SCHEDULER.shutdownNow();
-    // Thread.currentThread().interrupt();
-    // }
-    // }
-
-    public static <T> T getFlow(Class<T> clazz, UUID id) {
+    private static <T> T getFlowProxy(Class<T> clazz, UUID id) {
         try {
             return new ByteBuddy()
                     .subclass(clazz)
@@ -128,6 +118,35 @@ public class Persistasaurus {
         }
     }
 
+    public static <T> FlowInstance<T> getFlow(Class<T> clazz, UUID uuid) {
+        return new FlowInstance<>(getFlowProxy(clazz, uuid));
+    }
+
+    public static class FlowInstance<T> {
+        private T flow;
+
+        public FlowInstance(T flow) {
+            this.flow = flow;
+        }
+
+        public void run(Consumer<T> flowConsumer) {
+            flowConsumer.accept(flow);
+        }
+
+        public <R> R execute(Function<T, R> flowFunction) {
+            return flowFunction.apply(flow);
+        }
+
+        public void runAsync(Consumer<T> flowConsumer) {
+            EXECUTOR.execute(() -> flowConsumer.accept(flow));
+
+        }
+
+        public <R> CompletableFuture<R> executeAsync(Function<T, R> flowFunction) {
+            return CompletableFuture.supplyAsync(() -> flowFunction.apply(flow), EXECUTOR);
+        }
+    }
+
     public static class Interceptor {
 
         private static final Logger LOG = LoggerFactory.getLogger(Interceptor.class);
@@ -135,13 +154,11 @@ public class Persistasaurus {
         private final ExecutionLog executionLog;
         private final UUID id;
         private int step;
-        private boolean delayed;
 
         public Interceptor(UUID id) {
             this.executionLog = ExecutionLog.getInstance();
             this.id = id;
             this.step = 0;
-            this.delayed = false;
         }
 
         @RuntimeType
@@ -165,7 +182,7 @@ public class Persistasaurus {
             }
 
             Invocation loggedInvocation = executionLog.getInvocation(id, step);
-            boolean isDelayElapsed = false;
+            Duration remainingDelay = delay;
 
             if (loggedInvocation != null) {
                 if (!loggedInvocation.className().equals(className) || !loggedInvocation.methodName().equals(methodName)) {
@@ -177,20 +194,14 @@ public class Persistasaurus {
                             step, className, methodName, Arrays.toString(args), loggedInvocation.returnValue());
                     step++;
 
-                    if (method.getReturnType() == CompletableFuture.class) {
-                        return CompletableFuture.completedFuture(loggedInvocation.returnValue());
-                    }
-                    else {
-                        return loggedInvocation.returnValue();
-                    }
-
+                    return loggedInvocation.returnValue();
                 }
                 else {
                     LOG.info("Retrying incomplete step {} (attempt {}): {}.{} with args {}",
                             step, loggedInvocation.attempts() + 1, className, methodName, Arrays.toString(args));
 
                     if (delay != null) {
-                        isDelayElapsed = loggedInvocation.timestamp().plus(delay).isBefore(Instant.now());
+                        remainingDelay = Instant.now().until(loggedInvocation.timestamp().plus(delay));
                     }
                 }
             }
@@ -198,19 +209,14 @@ public class Persistasaurus {
             // Log invocation start (or increment attempts on retry via ON CONFLICT)
             executionLog.logInvocationStart(id, step, className, methodName, delay, args);
 
-            if (delay != null && !isDelayElapsed) {
-                LOG.info("Delaying step {}: {}.{} with args {}", step, className, methodName, Arrays.toString(args));
-                delayed = true;
-
-                // If this is the first time encountering this delayed step, schedule the flow for execution
-                if (loggedInvocation == null) {
-                    // Get the flow invocation (step 0) to schedule it
-                    Invocation flowInvocation = executionLog.getInvocation(id, 0);
-                    scheduleDelayedFlow(id, flowInvocation.className(), flowInvocation.methodName(),
-                            flowInvocation.parameters(), delay);
+            if (delay != null && remainingDelay.isPositive()) {
+                if (!Thread.currentThread().isVirtual()) {
+                    throw new IllegalStateException(
+                            "Can't run a delayed step on a non-virtual thread. Make sure to execute flows with delayed steps via FlowInstance::runAsync().");
                 }
 
-                return new CompletableFuture<>();
+                LOG.info("Delaying step {}: {}.{} with args {} for {}", step, className, methodName, Arrays.toString(args), remainingDelay);
+                Thread.sleep(remainingDelay);
             }
 
             LOG.info("Executing step {}: {}.{} with args {}", step, className, methodName, Arrays.toString(args));
@@ -219,10 +225,8 @@ public class Persistasaurus {
             step++;
             Object result = zuper.call();
 
-            if (!delayed) {
-                executionLog.logInvocationCompletion(id, currentStep, result);
-                LOG.info("Completed step {}: {}.{} -> {}", currentStep, className, methodName, result);
-            }
+            executionLog.logInvocationCompletion(id, currentStep, result);
+            LOG.info("Completed step {}: {}.{} -> {}", currentStep, className, methodName, result);
 
             return result;
         }

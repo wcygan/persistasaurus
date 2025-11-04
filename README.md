@@ -13,22 +13,22 @@ Mark flows with the `@Flow` annotation and steps with `@Step`:
 ```
 public class HelloWorldFlow {
 
-    @Flow
-    public void sayHello() {
-        int sum = 0;
+   @Flow
+   public void sayHello() {
+     int sum = 0;
 
-        for (int i = 0; i < 5; i++) {
-            sum += say("World", i);
-        }
+     for (int i = 0; i < 5; i++) {
+       sum += say("World", i);
+     }
 
-        System.out.println(String.format("Sum: %s", sum));
-    }
+     System.out.println(String.format("Sum: %s", sum));
+   }
 
-    @Step
-    protected int say(String name, int count) {
-        System.out.println(String.format("Hello, %s (%s)", name, count));
-        return count;
-    }
+   @Step
+   protected int say(String name, int count) {
+     System.out.println(String.format("Hello, %s (%s)", name, count));
+     return count;
+  }
 }
 ```
 
@@ -36,8 +36,8 @@ Retrieve and invoke a flow like so:
 
 ```
 UUID uuid = UUID.randomUUID();
-HelloWorldFlow flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
-flow.sayHello();
+FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+flow.run(f -> f.sayHello());
 ```
 
 If the program runs to completion, the following will be logged to stdout:
@@ -74,26 +74,18 @@ Sum: 10
 ## Delayed Steps
 
 Steps of a flow can be delayed.
-To do so, add the `@Step::delay()` option to the step in question.
-The step method must have a return type of `CompletableFuture`.
-The flow (or step) invoking a delayed step must return control to the caller immediately in order to ensure delayed execution.
-When the delay period has passed, the flow will be executed again,
-replay all the previously executed steps, and then continue from the delayed step.
+To do so, add the `@Step::delay()` option to the step in question:
 
 ```
 @Flow
 public void sayHello() throws Exception {
-    List<String> greetings = new ArrayList<>();
-    greetings.add(greet("Bob"));
+   List<String> greetings = new ArrayList<>();
+   greetings.add(greet("Bob"));
 
-    CompletableFuture<String> greeting = greetDelayed("Barry");
-    if (!greeting.isDone()) {
-        return;
-    }
+   String greeting = greetDelayed("Barry");
+   greetings.add(greeting);
 
-    greetings.add(greeting.get());
-
-    System.out.println(String.format("All greetings: %s", greetings));
+   System.out.println(String.format("All greetings: %s", greetings));
 }
 
 @Step
@@ -102,10 +94,21 @@ protected String greet(String name) {
 }
 
 @Step(delay = 5, timeUnit = ChronoUnit.SECONDS)
-protected CompletableFuture<String> greetDelayed(String name) {
-    return CompletableFuture.completedFuture(String.format("Delayed hello, %s", name));
+protected String greetDelayed(String name) {
+    return String.format("Delayed hello, %s", name);
 }
 ```
+
+Run flows with delayed steps via `runAsync()`:
+
+```
+UUID uuid = UUID.randomUUID();
+FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+flow.runAsync(f -> f.sayHello());
+```
+
+Under the hood, this will use a virtual thread for awaiting the given delay before proceeding with the workflow.
+When aborting a flow while it is awaiting a delayed step and then restarting the flow, only any remainder of the delay (if any) will be awaited before executing the delayed step.
 
 ## Examining the Execution Log
 

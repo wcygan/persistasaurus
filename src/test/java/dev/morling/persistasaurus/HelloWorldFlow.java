@@ -12,7 +12,7 @@ public class HelloWorldFlow {
     public static int FAIL_ON_COUNT = -1;
 
     @Flow
-    public void sayHello() {
+    public int sayHello() {
         int sum = 0;
 
         for (int i = 0; i < 5; i++) {
@@ -20,6 +20,8 @@ public class HelloWorldFlow {
         }
 
         System.out.println(String.format("Sum: %s", sum));
+
+        return sum;
     }
 
     @Step

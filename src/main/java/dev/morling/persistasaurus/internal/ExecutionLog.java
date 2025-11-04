@@ -21,7 +21,6 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 public class ExecutionLog {
 
@@ -123,15 +122,6 @@ public class ExecutionLog {
                 SET is_complete = 1, return_value = ?
                 WHERE id = ? AND step = ?
                 """;
-
-        if (returnValue instanceof CompletableFuture) {
-            try {
-                returnValue = ((CompletableFuture<?>) returnValue).get();
-            }
-            catch (Exception e) {
-                throw new RuntimeException("Couldn't get value", e);
-            }
-        }
 
         try (PreparedStatement pstmt = connection.prepareStatement(updateSQL)) {
             pstmt.setBytes(1, serializeToBytes(returnValue));
