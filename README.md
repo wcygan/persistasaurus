@@ -130,15 +130,20 @@ public void signupUser(String name, String email) {
 This flow will wait after the `sendConfirmationEmail()` step, until the `confirmEmailAddress()` step has been triggered externally.
 The parameter values passed to the awaiting step in the flow definition don't matter, you can pass `null` or the `any()` placeholder.
 
-Resume the flow like so:
+Later on, resume the flow like so, for instance from a Spring Boot REST method handler which receives email address confirmations:
 
 ```
-flow.resume(f -> {
-  f.confirmEmailAddress(confirmationTimestamp);
-});
+@PostMapping("/email-confirmations")
+void confirmEmailAddress(@RequestBody Confirmation confirmation) {
+  FlowInstance<UserSignupFlow> flow = Persistasaurus.getFlow(UserSignupFlow.class, confirmation.uuid());
+
+  flow.resume(f -> {
+    f.confirmEmailAddress(confirmation.timestamp());
+  });
+}
 ```
 
-The flow will now be resumed from the `confirmEmailAddress()` step, using the specified parameter values.
+The flow will now be resumed from the `confirmEmailAddress()` step, using the specified parameter value.
 
 ## Examining the Execution Log
 
