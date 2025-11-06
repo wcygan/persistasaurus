@@ -1,4 +1,4 @@
-# Persistasaurus
+# Persistasaurus 🦖
 
 A minimal durable execution library for Java, based on SQLite.
 
