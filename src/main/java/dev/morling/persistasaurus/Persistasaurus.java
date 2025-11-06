@@ -14,10 +14,13 @@ import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -26,12 +29,13 @@ import org.slf4j.LoggerFactory;
 
 import dev.morling.persistasaurus.internal.ExecutionLog;
 import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
+import dev.morling.persistasaurus.internal.ExecutionLog.InvocationStatus;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.implementation.MethodDelegation;
 import net.bytebuddy.implementation.bind.annotation.AllArguments;
+import net.bytebuddy.implementation.bind.annotation.Morph;
 import net.bytebuddy.implementation.bind.annotation.Origin;
 import net.bytebuddy.implementation.bind.annotation.RuntimeType;
-import net.bytebuddy.implementation.bind.annotation.SuperCall;
 import net.bytebuddy.implementation.bind.annotation.This;
 import net.bytebuddy.matcher.ElementMatchers;
 
@@ -40,6 +44,11 @@ public class Persistasaurus {
     private static final Logger LOG = LoggerFactory.getLogger(Persistasaurus.class);
 
     private static final ExecutorService EXECUTOR;
+
+    private static final ScopedValue<CallType> CALL_TYPE = ScopedValue.newInstance();
+
+    private static final ConcurrentMap<UUID, WaitCondition> WAIT_CONDITIONS = new ConcurrentHashMap<>();
+
     static {
         EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
         recoverIncompleteFlows();
@@ -106,7 +115,10 @@ public class Persistasaurus {
             return new ByteBuddy()
                     .subclass(clazz)
                     .method(ElementMatchers.any())
-                    .intercept(MethodDelegation.to(new Interceptor(id)))
+                    .intercept(
+                            MethodDelegation.withDefaultConfiguration()
+                                    .withBinders(Morph.Binder.install(OverrideCallable.class))
+                                    .to(new Interceptor(id)))
                     .make()
                     .load(Persistasaurus.class.getClassLoader())
                     .getLoaded()
@@ -122,6 +134,10 @@ public class Persistasaurus {
         return new FlowInstance<>(getFlowProxy(clazz, uuid));
     }
 
+    public static void await(Runnable r) {
+        ScopedValue.where(CALL_TYPE, CallType.AWAIT).run(r);
+    }
+
     public static class FlowInstance<T> {
         private T flow;
 
@@ -130,20 +146,29 @@ public class Persistasaurus {
         }
 
         public void run(Consumer<T> flowConsumer) {
-            flowConsumer.accept(flow);
+            ScopedValue.where(CALL_TYPE, CallType.REGULAR).run(() -> flowConsumer.accept(flow));
         }
 
         public <R> R execute(Function<T, R> flowFunction) {
-            return flowFunction.apply(flow);
+            return ScopedValue.where(CALL_TYPE, CallType.REGULAR).call(() -> flowFunction.apply(flow));
         }
 
         public void runAsync(Consumer<T> flowConsumer) {
-            EXECUTOR.execute(() -> flowConsumer.accept(flow));
+            EXECUTOR.execute(() -> {
+                ScopedValue.where(CALL_TYPE, CallType.REGULAR).run(() -> flowConsumer.accept(flow));
+            });
 
         }
 
         public <R> CompletableFuture<R> executeAsync(Function<T, R> flowFunction) {
-            return CompletableFuture.supplyAsync(() -> flowFunction.apply(flow), EXECUTOR);
+            return CompletableFuture.supplyAsync(() -> {
+                return ScopedValue.where(CALL_TYPE, CallType.REGULAR).call(() -> flowFunction.apply(flow));
+            },
+                    EXECUTOR);
+        }
+
+        public void resume(Consumer<T> flowConsumer) {
+            ScopedValue.where(CALL_TYPE, CallType.RESUME).run(() -> flowConsumer.accept(flow));
         }
     }
 
@@ -165,23 +190,33 @@ public class Persistasaurus {
         public Object intercept(@This Object instance,
                                 @Origin Method method,
                                 @AllArguments Object[] args,
-                                @SuperCall Callable<?> zuper)
-                throws Exception {
+                                @Morph OverrideCallable callable)
+                throws Throwable {
 
             if (!requiresLogging(method)) {
-                return zuper.call();
+                return callable.call(args);
             }
 
             String className = method.getDeclaringClass().getName();
             String methodName = method.getName();
             Duration delay = getDelay(method);
+            CallType callType = CALL_TYPE.get();
 
             if (isFlow(method)) {
                 step = 0;
                 LOG.info("Starting flow: {}.{}", className, methodName);
             }
 
-            Invocation loggedInvocation = executionLog.getInvocation(id, step);
+            Invocation loggedInvocation = null;
+
+            if (callType == CallType.RESUME) {
+                loggedInvocation = executionLog.getLatestInvocation(id);
+                step = loggedInvocation.step();
+            }
+            else {
+                loggedInvocation = executionLog.getInvocation(id, step);
+            }
+
             Duration remainingDelay = delay;
 
             if (loggedInvocation != null) {
@@ -189,12 +224,28 @@ public class Persistasaurus {
                     throw new IllegalStateException("Incompatible change of flow structure");
                 }
 
-                if (loggedInvocation.isComplete()) {
+                if (loggedInvocation.status() == InvocationStatus.COMPLETE) {
                     LOG.info("Replaying completed step {}: {}.{} with args {} -> {}",
                             step, className, methodName, Arrays.toString(args), loggedInvocation.returnValue());
                     step++;
 
                     return loggedInvocation.returnValue();
+                }
+                else if (loggedInvocation.status() == InvocationStatus.WAITING_FOR_SIGNAL && callType == CallType.RESUME) {
+                    LOG.info("Resuming waiting step {}: {}.{}", step, className, methodName);
+                    WaitCondition waitCondition = WAIT_CONDITIONS.get(id);
+
+                    waitCondition.lock.lock();
+
+                    try {
+                        WAIT_CONDITIONS.put(id, waitCondition.withResumeParameterValues(args));
+                        waitCondition.condition.signal();
+                    }
+                    finally {
+                        waitCondition.lock.unlock();
+                    }
+
+                    return null;
                 }
                 else {
                     LOG.info("Retrying incomplete step {} (attempt {}): {}.{} with args {}",
@@ -207,7 +258,8 @@ public class Persistasaurus {
             }
 
             // Log invocation start (or increment attempts on retry via ON CONFLICT)
-            executionLog.logInvocationStart(id, step, className, methodName, delay, args);
+            executionLog.logInvocationStart(id, step, className, methodName, delay,
+                    callType == CallType.AWAIT ? InvocationStatus.WAITING_FOR_SIGNAL : InvocationStatus.PENDING, args);
 
             if (delay != null && remainingDelay.isPositive()) {
                 if (!Thread.currentThread().isVirtual()) {
@@ -218,12 +270,34 @@ public class Persistasaurus {
                 LOG.info("Delaying step {}: {}.{} with args {} for {}", step, className, methodName, Arrays.toString(args), remainingDelay);
                 Thread.sleep(remainingDelay);
             }
+            else if (callType == CallType.AWAIT) {
+                if (!Thread.currentThread().isVirtual()) {
+                    throw new IllegalStateException(
+                            "Can't run a step waiting for an external signal on a non-virtual thread. Make sure to execute flows with wait steps via FlowInstance::runAsync().");
+                }
+
+                WaitCondition waitCondition = WAIT_CONDITIONS.computeIfAbsent(id, id -> {
+                    ReentrantLock l = new ReentrantLock();
+                    return new WaitCondition(l, l.newCondition(), null);
+                });
+
+                waitCondition.lock.lock();
+
+                try {
+                    LOG.info("Awaiting step {}: {}.{}", step, className, methodName);
+                    waitCondition.condition.await();
+                    args = WAIT_CONDITIONS.get(id).resumeParameterValues();
+                }
+                finally {
+                    waitCondition.lock.unlock();
+                }
+            }
 
             LOG.info("Executing step {}: {}.{} with args {}", step, className, methodName, Arrays.toString(args));
 
             int currentStep = step;
             step++;
-            Object result = zuper.call();
+            Object result = callable.call(args);
 
             executionLog.logInvocationCompletion(id, currentStep, result);
             LOG.info("Completed step {}: {}.{} -> {}", currentStep, className, methodName, result);
@@ -249,5 +323,22 @@ public class Persistasaurus {
         private boolean requiresLogging(Method method) {
             return isFlow(method) || method.isAnnotationPresent(Step.class);
         }
+    }
+
+    public static interface OverrideCallable {
+        Object call(Object[] args) throws Throwable;
+    }
+
+    private static record WaitCondition(ReentrantLock lock, Condition condition, Object[] resumeParameterValues) {
+
+        WaitCondition withResumeParameterValues(Object[] resumeParameterValues) {
+            return new WaitCondition(lock, condition, resumeParameterValues);
+        }
+    }
+
+    private enum CallType {
+        REGULAR,
+        AWAIT,
+        RESUME;
     }
 }

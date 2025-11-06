@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import dev.morling.persistasaurus.Persistasaurus.FlowInstance;
 import dev.morling.persistasaurus.internal.ExecutionLog;
 import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
+import dev.morling.persistasaurus.internal.ExecutionLog.InvocationStatus;
 
 public class DelayedFlowTest {
 
@@ -55,13 +56,12 @@ public class DelayedFlowTest {
         Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> {
             Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
             assertThat(flowInvocation).isNotNull();
-            System.out.println(flowInvocation);
-            return flowInvocation.isComplete();
+            return flowInvocation.status() == InvocationStatus.COMPLETE;
         });
 
         Invocation stepInvocation = executionLog.getInvocation(uuid, 1);
         assertThat(stepInvocation).isNotNull();
-        assertThat(stepInvocation.isComplete()).isTrue();
+        assertThat(stepInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
     }
 
     @Test
@@ -76,11 +76,11 @@ public class DelayedFlowTest {
         // Verify the flow was completed
         Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
         assertThat(flowInvocation).isNotNull();
-        assertThat(flowInvocation.isComplete()).isTrue();
+        assertThat(flowInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
 
         Invocation stepInvocation = executionLog.getInvocation(uuid, 1);
         assertThat(stepInvocation).isNotNull();
-        assertThat(stepInvocation.isComplete()).isTrue();
+        assertThat(stepInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
     }
 
     public static class DelayedTestFlow {

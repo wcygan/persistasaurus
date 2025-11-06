@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import dev.morling.persistasaurus.Persistasaurus.FlowInstance;
 import dev.morling.persistasaurus.internal.ExecutionLog;
 import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
+import dev.morling.persistasaurus.internal.ExecutionLog.InvocationStatus;
 
 public class PersistasaurusTest {
 
@@ -41,7 +42,7 @@ public class PersistasaurusTest {
         Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
         assertThat(flowInvocation).isNotNull();
         assertThat(flowInvocation.methodName()).isEqualTo("sayHello");
-        assertThat(flowInvocation.isComplete()).isTrue();
+        assertThat(flowInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
         assertThat(flowInvocation.attempts()).isEqualTo(1);
 
         // Verify all step invocations were logged (5 iterations)
@@ -49,7 +50,7 @@ public class PersistasaurusTest {
             Invocation stepInvocation = executionLog.getInvocation(uuid, i + 1);
             assertThat(stepInvocation).isNotNull();
             assertThat(stepInvocation.methodName()).isEqualTo("say");
-            assertThat(stepInvocation.isComplete()).isTrue();
+            assertThat(stepInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
             assertThat(stepInvocation.attempts()).isEqualTo(1);
             assertThat(stepInvocation.parameters()).hasSize(2);
             assertThat(stepInvocation.parameters()[0]).isEqualTo("World");
@@ -72,7 +73,7 @@ public class PersistasaurusTest {
         Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
         assertThat(flowInvocation).isNotNull();
         assertThat(flowInvocation.methodName()).isEqualTo("sayHello");
-        assertThat(flowInvocation.isComplete()).isTrue();
+        assertThat(flowInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
         assertThat(flowInvocation.attempts()).isEqualTo(1);
 
         // Verify all step invocations were logged (5 iterations)
@@ -80,7 +81,7 @@ public class PersistasaurusTest {
             Invocation stepInvocation = executionLog.getInvocation(uuid, i + 1);
             assertThat(stepInvocation).isNotNull();
             assertThat(stepInvocation.methodName()).isEqualTo("say");
-            assertThat(stepInvocation.isComplete()).isTrue();
+            assertThat(stepInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
             assertThat(stepInvocation.attempts()).isEqualTo(1);
             assertThat(stepInvocation.parameters()).hasSize(2);
             assertThat(stepInvocation.parameters()[0]).isEqualTo("World");
@@ -105,14 +106,14 @@ public class PersistasaurusTest {
         for (int i = 0; i < 3; i++) {
             Invocation stepInvocation = executionLog.getInvocation(uuid, i + 1);
             assertThat(stepInvocation).isNotNull();
-            assertThat(stepInvocation.isComplete()).isTrue();
+            assertThat(stepInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
             assertThat(stepInvocation.attempts()).isEqualTo(1);
         }
 
         // Verify the 4th iteration (count=3) was started but not completed
         Invocation failedStep = executionLog.getInvocation(uuid, 4);
         assertThat(failedStep).isNotNull();
-        assertThat(failedStep.isComplete()).isFalse();
+        assertThat(failedStep.status()).isEqualTo(InvocationStatus.PENDING);
         assertThat(failedStep.attempts()).isEqualTo(1);
 
         // Fix the failure condition and retry
@@ -122,13 +123,13 @@ public class PersistasaurusTest {
         // Verify the failed step now has 2 attempts and is complete
         Invocation retriedStep = executionLog.getInvocation(uuid, 4);
         assertThat(retriedStep).isNotNull();
-        assertThat(retriedStep.isComplete()).isTrue();
+        assertThat(retriedStep.status()).isEqualTo(InvocationStatus.COMPLETE);
         assertThat(retriedStep.attempts()).isEqualTo(2);
 
         // Verify the 5th iteration (count=4) completed on first attempt
         Invocation lastStep = executionLog.getInvocation(uuid, 5);
         assertThat(lastStep).isNotNull();
-        assertThat(lastStep.isComplete()).isTrue();
+        assertThat(lastStep.status()).isEqualTo(InvocationStatus.COMPLETE);
         assertThat(lastStep.attempts()).isEqualTo(1);
     }
 
@@ -166,7 +167,7 @@ public class PersistasaurusTest {
 
         failedStep = executionLog.getInvocation(uuid, 3);
         assertThat(failedStep.attempts()).isEqualTo(4);
-        assertThat(failedStep.isComplete()).isTrue();
+        assertThat(failedStep.status()).isEqualTo(InvocationStatus.COMPLETE);
     }
 
     @Test

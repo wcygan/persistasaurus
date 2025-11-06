@@ -110,6 +110,36 @@ flow.runAsync(f -> f.sayHello());
 Under the hood, this will use a virtual thread for awaiting the given delay before proceeding with the workflow.
 When aborting a flow while it is awaiting a delayed step and then restarting the flow, only any remainder of the delay (if any) will be awaited before executing the delayed step.
 
+## Waiting for External Signals ("Human in the Loop")
+
+For many flows it is required to wait for some external input before proceeding with a certain step.
+This can be implemented using `await()` like so:
+
+```
+@Flow
+public void signupUser(String name, String email) {
+  createUserRecord(name, email);
+
+  sendConfirmationEmail(name, email);
+
+  await(() -> confirmEmailAddress(any()));
+
+  sendWelcomeEmail(name, email);
+}
+```
+This flow will wait after the `sendConfirmationEmail()` step, until the `confirmEmailAddress()` step has been triggered externally.
+The parameter values passed to the awaiting step in the flow definition don't matter, you can pass `null` or the `any()` placeholder.
+
+Resume the flow like so:
+
+```
+flow.resume(f -> {
+  f.confirmEmailAddress(confirmationTimestamp);
+});
+```
+
+The flow will now be resumed from the `confirmEmailAddress()` step, using the specified parameter values.
+
 ## Examining the Execution Log
 
 You can query the execution log with any SQLite browser of your choice, for instance using DuckDB:

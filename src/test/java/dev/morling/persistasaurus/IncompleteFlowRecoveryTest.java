@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import dev.morling.persistasaurus.internal.ExecutionLog;
 import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
+import dev.morling.persistasaurus.internal.ExecutionLog.InvocationStatus;
 
 public class IncompleteFlowRecoveryTest {
 
@@ -39,12 +40,13 @@ public class IncompleteFlowRecoveryTest {
                 RecoveryTestFlow.class.getName(),
                 "executeFlow",
                 null,
+                InvocationStatus.PENDING,
                 new Object[0]);
 
         // Verify it's incomplete
         Invocation incompleteFlow = executionLog.getInvocation(uuid, 0);
         assertThat(incompleteFlow).isNotNull();
-        assertThat(incompleteFlow.isComplete()).isFalse();
+        assertThat(incompleteFlow.status()).isEqualTo(InvocationStatus.PENDING);
 
         Persistasaurus.recoverIncompleteFlows();
 
@@ -57,7 +59,7 @@ public class IncompleteFlowRecoveryTest {
         // Verify flow is now complete
         Invocation completedFlow = executionLog.getInvocation(uuid, 0);
         assertThat(completedFlow).isNotNull();
-        assertThat(completedFlow.isComplete()).isTrue();
+        assertThat(completedFlow.status()).isEqualTo(InvocationStatus.COMPLETE);
     }
 
     public static class RecoveryTestFlow {

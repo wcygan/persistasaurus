@@ -20,9 +20,16 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public class ExecutionLog {
+
+    public enum InvocationStatus {
+        PENDING,
+        WAITING_FOR_SIGNAL,
+        COMPLETE;
+    }
 
     public record Invocation(
                              UUID id,
@@ -30,7 +37,7 @@ public class ExecutionLog {
                              Instant timestamp,
                              String className,
                              String methodName,
-                             boolean isComplete,
+                             InvocationStatus status,
                              int attempts,
                              Object[] parameters,
                              Object returnValue) {
@@ -74,7 +81,7 @@ public class ExecutionLog {
                     class_name TEXT NOT NULL,
                     method_name TEXT NOT NULL,
                     delay INTEGER,
-                    is_complete INTEGER NOT NULL,
+                    status TEXT CHECK( status IN ('PENDING','WAITING_FOR_SIGNAL','COMPLETE') ) NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 1,
                     parameters BLOB,
                     return_value BLOB,
@@ -87,9 +94,9 @@ public class ExecutionLog {
         }
     }
 
-    public synchronized void logInvocationStart(UUID id, int step, String className, String methodName, Duration delay, Object[] parameters) {
+    public synchronized void logInvocationStart(UUID id, int step, String className, String methodName, Duration delay, InvocationStatus status, Object[] parameters) {
         String insertSQL = """
-                INSERT INTO execution_log (id, step, timestamp, class_name, method_name, delay, is_complete, attempts, parameters)
+                INSERT INTO execution_log (id, step, timestamp, class_name, method_name, delay, status, attempts, parameters)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id, step)
                 DO UPDATE SET attempts = attempts + 1
@@ -106,7 +113,7 @@ public class ExecutionLog {
                 pstmt.setLong(6, delay.toMillis());
             }
 
-            pstmt.setInt(7, 0);
+            pstmt.setString(7, status.name());
             pstmt.setInt(8, 1);
             pstmt.setBytes(9, serializeToBytes(parameters));
             pstmt.executeUpdate();
@@ -119,7 +126,7 @@ public class ExecutionLog {
     public synchronized void logInvocationCompletion(UUID id, int step, Object returnValue) {
         String updateSQL = """
                 UPDATE execution_log
-                SET is_complete = 1, return_value = ?
+                SET status = 'COMPLETE', return_value = ?
                 WHERE id = ? AND step = ?
                 """;
 
@@ -136,7 +143,7 @@ public class ExecutionLog {
 
     public synchronized Invocation getInvocation(UUID id, int step) {
         String selectSQL = """
-                SELECT id, step, timestamp, class_name, method_name, is_complete, attempts, parameters, return_value
+                SELECT id, step, timestamp, class_name, method_name, status, attempts, parameters, return_value
                 FROM execution_log
                 WHERE id = ? AND step = ?
                 """;
@@ -153,7 +160,7 @@ public class ExecutionLog {
                             Instant.ofEpochMilli(rs.getLong("timestamp")),
                             rs.getString("class_name"),
                             rs.getString("method_name"),
-                            rs.getInt("is_complete") == 1,
+                            InvocationStatus.valueOf(rs.getString("status")),
                             rs.getInt("attempts"),
                             (Object[]) deserializeFromBytes(rs.getBytes("parameters")),
                             deserializeFromBytes(rs.getBytes("return_value")));
@@ -168,12 +175,47 @@ public class ExecutionLog {
         }
     }
 
-    public synchronized java.util.List<Invocation> getIncompleteFlows() {
+    public synchronized Invocation getLatestInvocation(UUID id) {
         String selectSQL = """
-                SELECT id, step, timestamp, class_name, method_name, is_complete, attempts, parameters, return_value
+                SELECT id, step, timestamp, class_name, method_name, status, attempts, parameters, return_value
+                FROM execution_log
+                WHERE id = ?
+                ORDER BY step DESC
+                LIMIT 1
+                """;
+
+        try (PreparedStatement pstmt = connection.prepareStatement(selectSQL)) {
+            pstmt.setString(1, id.toString());
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return new Invocation(
+                            UUID.fromString(rs.getString("id")),
+                            rs.getInt("step"),
+                            Instant.ofEpochMilli(rs.getLong("timestamp")),
+                            rs.getString("class_name"),
+                            rs.getString("method_name"),
+                            InvocationStatus.valueOf(rs.getString("status")),
+                            rs.getInt("attempts"),
+                            (Object[]) deserializeFromBytes(rs.getBytes("parameters")),
+                            deserializeFromBytes(rs.getBytes("return_value")));
+                }
+                else {
+                    return null;
+                }
+            }
+        }
+        catch (SQLException e) {
+            throw new RuntimeException("Failed to retrieve latest invocation", e);
+        }
+    }
+
+    public synchronized List<Invocation> getIncompleteFlows() {
+        String selectSQL = """
+                SELECT id, step, timestamp, class_name, method_name, status, attempts, parameters, return_value
                 FROM execution_log
                 WHERE step = 0
-                  AND is_complete = 0
+                  AND status <> 'COMPLETE'
                 ORDER BY timestamp ASC
                 """;
 
@@ -189,7 +231,7 @@ public class ExecutionLog {
                         Instant.ofEpochMilli(rs.getLong("timestamp")),
                         rs.getString("class_name"),
                         rs.getString("method_name"),
-                        rs.getInt("is_complete") == 1,
+                        InvocationStatus.valueOf(rs.getString("status")),
                         rs.getInt("attempts"),
                         (Object[]) deserializeFromBytes(rs.getBytes("parameters")),
                         deserializeFromBytes(rs.getBytes("return_value"))));
