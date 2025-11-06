@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,37 @@ public class PersistasaurusTest {
         int sum = flow.execute(f -> f.sayHello());
 
         assertThat(sum).isEqualByComparingTo(10);
+
+        // Verify the flow method was logged
+        Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
+        assertThat(flowInvocation).isNotNull();
+        assertThat(flowInvocation.methodName()).isEqualTo("sayHello");
+        assertThat(flowInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
+        assertThat(flowInvocation.attempts()).isEqualTo(1);
+
+        // Verify all step invocations were logged (5 iterations)
+        for (int i = 0; i < 5; i++) {
+            Invocation stepInvocation = executionLog.getInvocation(uuid, i + 1);
+            assertThat(stepInvocation).isNotNull();
+            assertThat(stepInvocation.methodName()).isEqualTo("say");
+            assertThat(stepInvocation.status()).isEqualTo(InvocationStatus.COMPLETE);
+            assertThat(stepInvocation.attempts()).isEqualTo(1);
+            assertThat(stepInvocation.parameters()).hasSize(2);
+            assertThat(stepInvocation.parameters()[0]).isEqualTo("World");
+            assertThat(stepInvocation.parameters()[1]).isEqualTo(i);
+            assertThat(stepInvocation.returnValue()).isEqualTo(i);
+        }
+    }
+
+    @Test
+    public void shouldExecuteFlowAsyncSuccessfully() throws Exception {
+        HelloWorldFlow.FAIL_ON_COUNT = -1;
+        UUID uuid = UUID.randomUUID();
+
+        FlowInstance<HelloWorldFlow> flow = Persistasaurus.getFlow(HelloWorldFlow.class, uuid);
+        CompletableFuture<Integer> sum = flow.executeAsync(f -> f.sayHello());
+
+        assertThat(sum.get()).isEqualByComparingTo(10);
 
         // Verify the flow method was logged
         Invocation flowInvocation = executionLog.getInvocation(uuid, 0);
