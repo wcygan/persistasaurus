@@ -20,10 +20,9 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import dev.morling.persistasaurus.Persistasaurus.FlowInstance;
 import dev.morling.persistasaurus.internal.ExecutionLog;
-import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
 import dev.morling.persistasaurus.internal.ExecutionLog.InvocationStatus;
+import dev.morling.persistasaurus.internal.Invocation;
 
 public class DelayedFlowTest {
 

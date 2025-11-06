@@ -31,18 +31,6 @@ public class ExecutionLog {
         COMPLETE;
     }
 
-    public record Invocation(
-                             UUID id,
-                             int step,
-                             Instant timestamp,
-                             String className,
-                             String methodName,
-                             InvocationStatus status,
-                             int attempts,
-                             Object[] parameters,
-                             Object returnValue) {
-    }
-
     private static final String DB_URL = "jdbc:sqlite:execution_log.db";
     private static final ExecutionLog INSTANCE = new ExecutionLog();
 
@@ -123,18 +111,36 @@ public class ExecutionLog {
         }
     }
 
-    public synchronized void logInvocationCompletion(UUID id, int step, Object returnValue) {
+    public synchronized Invocation logInvocationCompletion(UUID id, int step, Object returnValue) {
         String updateSQL = """
                 UPDATE execution_log
                 SET status = 'COMPLETE', return_value = ?
                 WHERE id = ? AND step = ?
+                RETURNING id, step, timestamp, class_name, method_name, status, attempts, parameters, return_value
                 """;
 
         try (PreparedStatement pstmt = connection.prepareStatement(updateSQL)) {
             pstmt.setBytes(1, serializeToBytes(returnValue));
             pstmt.setString(2, id.toString());
             pstmt.setInt(3, step);
-            pstmt.executeUpdate();
+
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return new Invocation(
+                            UUID.fromString(rs.getString("id")),
+                            rs.getInt("step"),
+                            Instant.ofEpochMilli(rs.getLong("timestamp")),
+                            rs.getString("class_name"),
+                            rs.getString("method_name"),
+                            InvocationStatus.valueOf(rs.getString("status")),
+                            rs.getInt("attempts"),
+                            (Object[]) deserializeFromBytes(rs.getBytes("parameters")),
+                            deserializeFromBytes(rs.getBytes("return_value")));
+                }
+                else {
+                    throw new RuntimeException("No invocation found with id=" + id + " and step=" + step);
+                }
+            }
         }
         catch (SQLException e) {
             throw new RuntimeException("Failed to update invocation completion", e);

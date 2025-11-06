@@ -18,7 +18,6 @@ import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import dev.morling.persistasaurus.Persistasaurus.FlowInstance;
 import dev.morling.persistasaurus.internal.ExecutionLog;
 
 public class ExternallyResumedFlowTest {

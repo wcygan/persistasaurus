@@ -14,22 +14,19 @@ import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
-import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dev.morling.persistasaurus.internal.ExecutionLog;
-import dev.morling.persistasaurus.internal.ExecutionLog.Invocation;
 import dev.morling.persistasaurus.internal.ExecutionLog.InvocationStatus;
+import dev.morling.persistasaurus.internal.Invocation;
 import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.implementation.MethodDelegation;
 import net.bytebuddy.implementation.bind.annotation.AllArguments;
@@ -43,9 +40,9 @@ public class Persistasaurus {
 
     private static final Logger LOG = LoggerFactory.getLogger(Persistasaurus.class);
 
-    private static final ExecutorService EXECUTOR;
+    static final ExecutorService EXECUTOR;
 
-    private static final ScopedValue<CallType> CALL_TYPE = ScopedValue.newInstance();
+    static final ScopedValue<CallType> CALL_TYPE = ScopedValue.newInstance();
 
     private static final ConcurrentMap<UUID, WaitCondition> WAIT_CONDITIONS = new ConcurrentHashMap<>();
 
@@ -131,45 +128,11 @@ public class Persistasaurus {
     }
 
     public static <T> FlowInstance<T> getFlow(Class<T> clazz, UUID uuid) {
-        return new FlowInstance<>(getFlowProxy(clazz, uuid));
+        return new FlowInstance<>(uuid, getFlowProxy(clazz, uuid));
     }
 
     public static void await(Runnable r) {
         ScopedValue.where(CALL_TYPE, CallType.AWAIT).run(r);
-    }
-
-    public static class FlowInstance<T> {
-        private T flow;
-
-        public FlowInstance(T flow) {
-            this.flow = flow;
-        }
-
-        public void run(Consumer<T> flowConsumer) {
-            ScopedValue.where(CALL_TYPE, CallType.REGULAR).run(() -> flowConsumer.accept(flow));
-        }
-
-        public <R> R execute(Function<T, R> flowFunction) {
-            return ScopedValue.where(CALL_TYPE, CallType.REGULAR).call(() -> flowFunction.apply(flow));
-        }
-
-        public void runAsync(Consumer<T> flowConsumer) {
-            EXECUTOR.execute(() -> {
-                ScopedValue.where(CALL_TYPE, CallType.REGULAR).run(() -> flowConsumer.accept(flow));
-            });
-
-        }
-
-        public <R> CompletableFuture<R> executeAsync(Function<T, R> flowFunction) {
-            return CompletableFuture.supplyAsync(() -> {
-                return ScopedValue.where(CALL_TYPE, CallType.REGULAR).call(() -> flowFunction.apply(flow));
-            },
-                    EXECUTOR);
-        }
-
-        public void resume(Consumer<T> flowConsumer) {
-            ScopedValue.where(CALL_TYPE, CallType.RESUME).run(() -> flowConsumer.accept(flow));
-        }
     }
 
     public static class Interceptor {
@@ -299,8 +262,12 @@ public class Persistasaurus {
             step++;
             Object result = callable.call(args);
 
-            executionLog.logInvocationCompletion(id, currentStep, result);
+            loggedInvocation = executionLog.logInvocationCompletion(id, currentStep, result);
             LOG.info("Completed step {}: {}.{} -> {}", currentStep, className, methodName, result);
+
+            if (loggedInvocation.isFlow() && loggedInvocation.status() == InvocationStatus.COMPLETE) {
+                WAIT_CONDITIONS.remove(id);
+            }
 
             return result;
         }
@@ -336,8 +303,8 @@ public class Persistasaurus {
         }
     }
 
-    private enum CallType {
-        REGULAR,
+    enum CallType {
+        RUN,
         AWAIT,
         RESUME;
     }

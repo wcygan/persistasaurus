@@ -9,8 +9,6 @@ package dev.morling.persistasaurus;
 
 import java.util.UUID;
 
-import dev.morling.persistasaurus.Persistasaurus.FlowInstance;
-
 public class FlowTestApp {
 
     public static class HelloWorldFlow {
